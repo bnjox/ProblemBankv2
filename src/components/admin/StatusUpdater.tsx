@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { apiErrorMessage } from '@/lib/api-response';
 
 const STATUSES = [
   'submitted',
@@ -38,7 +37,7 @@ export default function StatusUpdater({
       });
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(apiErrorMessage(data) ?? 'Failed to update');
+        throw new Error(data.error ?? 'Failed to update');
       }
       setStatus(next);
       toast.success(`Status updated to ${next}`);

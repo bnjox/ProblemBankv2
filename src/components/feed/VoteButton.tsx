@@ -4,7 +4,6 @@ import { useState, useEffect, useTransition } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { apiErrorMessage } from '@/lib/api-response';
 import { UNVOTE_WINDOW_MS } from '@/lib/enums';
 
 interface Props {
@@ -41,6 +40,8 @@ export default function VoteButton({
 
   const elapsed = votedAt ? now - votedAt.getTime() : 0;
   const canUnvote = !!votedAt && elapsed < UNVOTE_WINDOW_MS;
+  const unvoteRemainingMs = canUnvote ? UNVOTE_WINDOW_MS - elapsed : 0;
+  const unvoteSecsLeft = Math.max(0, Math.ceil(unvoteRemainingMs / 1000));
 
   async function toggle() {
     if (disabled) return;
@@ -70,11 +71,10 @@ export default function VoteButton({
         // Revert
         setCount((c) => c + (wasVoted ? 1 : -1));
         setVotedAt(wasVoted ? new Date(initialVotedAt!) : null);
-        const msg = apiErrorMessage(data);
         if (data.remaining === 0) {
-          toast.warning(msg ?? 'Out of votes this week. Resets Monday.');
+          toast.warning(data.error ?? 'Out of votes this week. Resets Monday.');
         } else {
-          toast.error(msg ?? 'Vote failed');
+          toast.error(data.error ?? 'Vote failed');
         }
         return;
       }
@@ -111,6 +111,9 @@ export default function VoteButton({
     >
       <span aria-hidden="true">{votedAt ? '▲' : '△'}</span>
       <span>{count}</span>
+      {canUnvote && (
+        <span className="text-xs ml-1 opacity-75">unvote {unvoteSecsLeft}s</span>
+      )}
     </button>
   );
 }

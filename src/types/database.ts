@@ -60,7 +60,6 @@ export interface CommentRow {
   id: string;
   userId: string;
   submissionId: string;
-  parentCommentId: string | null;
   content: string;
   createdAt: string;
 }
@@ -144,7 +143,7 @@ export interface Database {
       };
       Comment: {
         Row: CommentRow;
-        Insert: WithoutDefaults<CommentRow, 'id' | 'createdAt' | 'parentCommentId'>;
+        Insert: WithoutDefaults<CommentRow, 'id' | 'createdAt'>;
         Update: Partial<CommentRow>;
         Relationships: [];
       };

@@ -1,12 +1,12 @@
+import { NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
-import { apiOk } from '@/lib/api-response';
-import type { HealthResponse } from './_schemas';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const checks: HealthResponse['checks'] = {};
+  const checks: Record<string, { ok: boolean; error?: string }> = {};
 
+  // DB connectivity — a tiny select against any table.
   try {
     const { error } = await getSupabase()
       .from('User')
@@ -17,6 +17,7 @@ export async function GET() {
     checks.db = { ok: false, error: err instanceof Error ? err.message : 'unknown' };
   }
 
+  // Env presence (don't log values)
   const envChecks: Array<[string, string]> = [
     ['NEXTAUTH_SECRET', 'NEXTAUTH_SECRET'],
     ['SUPABASE_URL', 'SUPABASE_URL'],
@@ -29,6 +30,8 @@ export async function GET() {
   }
 
   const allOk = Object.values(checks).every((c) => c.ok);
-  const body: HealthResponse = { ok: allOk, checks, timestamp: new Date().toISOString() };
-  return apiOk(body, { status: allOk ? 200 : 503 });
+  return NextResponse.json(
+    { ok: allOk, checks, timestamp: new Date().toISOString() },
+    { status: allOk ? 200 : 503 },
+  );
 }

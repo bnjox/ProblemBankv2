@@ -6,7 +6,6 @@ import { toast } from 'sonner';
 import { MAX_BIO_LEN } from '@/lib/enums';
 
 interface Props {
-  userId: string;
   user: {
     name: string | null;
     bio: string | null;
@@ -16,7 +15,7 @@ interface Props {
   };
 }
 
-export default function BuilderProfileEditor({ userId, user }: Props) {
+export default function BuilderProfileEditor({ user }: Props) {
   const router = useRouter();
   const [name, setName] = useState(user.name ?? '');
   const [bio, setBio] = useState(user.bio ?? '');
@@ -29,7 +28,7 @@ export default function BuilderProfileEditor({ userId, user }: Props) {
     e.preventDefault();
     setSaving(true);
     try {
-      const res = await fetch(`/api/builders/${userId}`, {
+      const res = await fetch('/api/me/profile', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -41,10 +40,8 @@ export default function BuilderProfileEditor({ userId, user }: Props) {
         }),
       });
       if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as {
-          error?: { code?: string; message?: string };
-        };
-        throw new Error(data.error?.message ?? 'Failed to save');
+        const data = await res.json();
+        throw new Error(data.error ?? 'Failed to save');
       }
       toast.success('Profile updated');
       router.refresh();

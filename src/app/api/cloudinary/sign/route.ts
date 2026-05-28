@@ -1,7 +1,7 @@
+import { NextResponse } from 'next/server';
 import { v2 as cloudinary } from 'cloudinary';
-import { apiError, apiOk, parseOrError } from '@/lib/api-response';
-import { API_ERROR_CODES } from '@/lib/api-error-codes';
-import { CloudinarySignSchema } from './_schemas';
+import { z } from 'zod';
+import { auth } from '@/lib/auth';
 
 cloudinary.config({
   cloud_name: process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME,
@@ -9,21 +9,22 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// TODO(auth): require an authenticated session (any role). Without auth the
-// endpoint exposes signed upload credentials to anyone — fine in dev, must be
-// closed before launch.
+const BodySchema = z.object({
+  folder: z.string().min(1).max(120).optional(),
+});
 
 export async function POST(req: Request) {
-  const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
-  if (!cloudName || !apiKey || !apiSecret) {
-    return apiError(
-      API_ERROR_CODES.upload_unconfigured,
-      503,
-      'Image uploads disabled — Cloudinary not configured.',
-    );
+  if (
+    !process.env.CLOUDINARY_API_KEY ||
+    !process.env.CLOUDINARY_API_SECRET ||
+    !process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME
+  ) {
+    return NextResponse.json({ error: 'Cloudinary not configured' }, { status: 500 });
   }
 
   let body: unknown = {};
@@ -32,13 +33,20 @@ export async function POST(req: Request) {
   } catch {
     body = {};
   }
+  const parsed = BodySchema.safeParse(body);
+  const folder = parsed.success && parsed.data.folder ? parsed.data.folder : 'problem-bank/submissions';
 
-  const parsed = parseOrError(CloudinarySignSchema, body);
-  if (!parsed.ok) return parsed.response;
-
-  const folder = parsed.data.folder ?? 'problem-bank/submissions';
   const timestamp = Math.round(Date.now() / 1000);
-  const signature = cloudinary.utils.api_sign_request({ timestamp, folder }, apiSecret);
+  const signature = cloudinary.utils.api_sign_request(
+    { timestamp, folder },
+    process.env.CLOUDINARY_API_SECRET,
+  );
 
-  return apiOk({ signature, timestamp, cloudName, apiKey, folder });
+  return NextResponse.json({
+    signature,
+    timestamp,
+    cloudName: process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    folder,
+  });
 }

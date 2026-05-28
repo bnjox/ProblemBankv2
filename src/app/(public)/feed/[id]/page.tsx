@@ -131,7 +131,6 @@ export default async function SubmissionDetail({
           id: c.id,
           content: c.content,
           createdAt: c.createdAt,
-          parentCommentId: c.parentCommentId,
           user: c.user ?? { id: c.userId, name: null },
         }))}
         open={commentsOpen}

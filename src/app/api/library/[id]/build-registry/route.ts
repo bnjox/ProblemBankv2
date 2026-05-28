@@ -1,33 +1,21 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { auth } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase';
 import { parseGitHubRepo } from '@/lib/github';
-import { apiError, apiOk, parseOrError } from '@/lib/api-response';
-import { API_ERROR_CODES } from '@/lib/api-error-codes';
 import type { BuildRegistryRow } from '@/types/database';
-import {
-  BuildRegistryParamsSchema,
-  DeleteQuerySchema,
-  RegisterSchema,
-  UpdateSchema,
-} from './_schemas';
 
-// Silently null any repoUrl that's empty or not a github.com URL. This is the
-// QA-spec behavior (`null invalid URLs`) — the UI later shows "Last push: ..."
-// only when there's a valid public repo to fetch.
-function normalizeRepoUrl(input?: string): string | null {
-  if (!input || !input.trim()) return null;
-  return parseGitHubRepo(input) ? input.trim() : null;
-}
-
-async function parseEntryId(params: Promise<{ id: string }>) {
-  const raw = await params;
-  return parseOrError(BuildRegistryParamsSchema, raw);
-}
+const RegisterSchema = z.object({
+  repoUrl: z.string().url().max(300).optional().or(z.literal('')),
+});
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  // TODO(auth): replace dev userId with auth() session.user.id.
-  const parsedParams = await parseEntryId(params);
-  if (!parsedParams.ok) return parsedParams.response;
-  const libraryEntryId = parsedParams.data.id;
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const userId = session.user.id;
+  const { id } = await params;
 
   let body: unknown = {};
   try {
@@ -35,54 +23,53 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   } catch {
     body = {};
   }
-
-  const parsedBody = parseOrError(RegisterSchema, body);
-  if (!parsedBody.ok) return parsedBody.response;
-  const { userId, repoUrl } = parsedBody.data;
+  const parsed = RegisterSchema.safeParse(body);
+  const rawRepo = parsed.success ? parsed.data.repoUrl : '';
+  const repoUrl = rawRepo && parseGitHubRepo(rawRepo) ? rawRepo : null;
 
   const supabase = getSupabase();
   const { data: entry } = await supabase
     .from('LibraryEntry')
     .select('id')
-    .eq('id', libraryEntryId)
+    .eq('id', id)
     .maybeSingle();
-  if (!entry) return apiError(API_ERROR_CODES.not_found, 404, 'Library entry not found.');
+  if (!entry) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
   const { data: existing } = await supabase
     .from('BuildRegistry')
     .select('id')
     .eq('userId', userId)
-    .eq('libraryEntryId', libraryEntryId)
+    .eq('libraryEntryId', id)
     .maybeSingle();
   if (existing) {
-    return apiError(
-      API_ERROR_CODES.already_registered,
-      409,
-      'You are already registered as a builder on this entry.',
-    );
+    return NextResponse.json({ error: 'Already registered' }, { status: 400 });
   }
 
   const { data, error } = (await supabase
     .from('BuildRegistry')
-    .insert({ userId, libraryEntryId, repoUrl: normalizeRepoUrl(repoUrl) } as never)
-    .select('*')) as { data: BuildRegistryRow[] | null; error: { message: string } | null };
-
+    .insert({ userId, libraryEntryId: id, repoUrl } as never)
+    .select('*, user:User(id, name, githubUrl)')) as {
+    data: BuildRegistryRow[] | null;
+    error: unknown;
+  };
   if (error || !data?.[0]) {
-    return apiError(
-      API_ERROR_CODES.internal_error,
-      500,
-      error?.message ?? 'Failed to register.',
-    );
+    return NextResponse.json({ error: 'Failed to register' }, { status: 500 });
   }
 
-  return apiOk({ record: data[0] }, { status: 201 });
+  return NextResponse.json({ record: data[0] }, { status: 201 });
 }
 
+const UpdateSchema = z.object({
+  repoUrl: z.string().max(300).optional().or(z.literal('')),
+});
+
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  // TODO(auth): replace dev userId with auth() session.user.id.
-  const parsedParams = await parseEntryId(params);
-  if (!parsedParams.ok) return parsedParams.response;
-  const libraryEntryId = parsedParams.data.id;
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const userId = session.user.id;
+  const { id } = await params;
 
   let body: unknown = {};
   try {
@@ -90,46 +77,48 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   } catch {
     body = {};
   }
+  const parsed = UpdateSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: 'Invalid input', issues: parsed.error.issues },
+      { status: 400 },
+    );
+  }
 
-  const parsedBody = parseOrError(UpdateSchema, body);
-  if (!parsedBody.ok) return parsedBody.response;
-  const { userId, repoUrl } = parsedBody.data;
+  const repoUrl =
+    parsed.data.repoUrl && parsed.data.repoUrl.trim() !== ''
+      ? parseGitHubRepo(parsed.data.repoUrl)
+        ? parsed.data.repoUrl
+        : null
+      : null;
 
   const { data, error } = (await getSupabase()
     .from('BuildRegistry')
-    .update({ repoUrl: normalizeRepoUrl(repoUrl) } as never)
+    .update({ repoUrl } as never)
     .eq('userId', userId)
-    .eq('libraryEntryId', libraryEntryId)
-    .select('*')) as { data: BuildRegistryRow[] | null; error: { message: string } | null };
-
-  if (error) {
-    return apiError(API_ERROR_CODES.internal_error, 500, error.message);
-  }
-  if (!data?.[0]) {
-    return apiError(API_ERROR_CODES.not_found, 404, 'Not registered.');
-  }
-  return apiOk({ record: data[0] });
+    .eq('libraryEntryId', id)
+    .select('*')) as { data: BuildRegistryRow[] | null; error: unknown };
+  if (error) return NextResponse.json({ error: 'Update failed' }, { status: 500 });
+  if (!data?.[0]) return NextResponse.json({ error: 'Not registered' }, { status: 404 });
+  return NextResponse.json({ record: data[0] });
 }
 
-export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  // TODO(auth): replace dev userId with auth() session.user.id.
-  const parsedParams = await parseEntryId(params);
-  if (!parsedParams.ok) return parsedParams.response;
-  const libraryEntryId = parsedParams.data.id;
-
-  const url = new URL(req.url);
-  const parsedQuery = parseOrError(DeleteQuerySchema, Object.fromEntries(url.searchParams));
-  if (!parsedQuery.ok) return parsedQuery.response;
-  const { userId } = parsedQuery.data;
+export async function DELETE(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const userId = session.user.id;
+  const { id } = await params;
 
   const { error } = await getSupabase()
     .from('BuildRegistry')
     .delete()
     .eq('userId', userId)
-    .eq('libraryEntryId', libraryEntryId);
-
-  if (error) {
-    return apiError(API_ERROR_CODES.not_found, 404, 'Not registered.');
-  }
-  return apiOk({ ok: true });
+    .eq('libraryEntryId', id);
+  if (error) return NextResponse.json({ error: 'Not registered' }, { status: 404 });
+  return NextResponse.json({ ok: true });
 }

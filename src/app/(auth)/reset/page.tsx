@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { Turnstile } from '@marsidev/react-turnstile';
 import { toast } from 'sonner';
-import { apiErrorMessage } from '@/lib/api-response';
 
 export default function ResetRequestPage() {
   const [email, setEmail] = useState('');
@@ -23,7 +22,7 @@ export default function ResetRequestPage() {
       });
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(apiErrorMessage(data) ?? 'Failed');
+        throw new Error(data.error ?? 'Failed');
       }
       setSent(true);
       toast.success('Check your email for a reset link');
